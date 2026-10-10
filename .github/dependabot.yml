@@ -1,0 +1,56 @@
+# Dependabot configuration for suprminer
+# This file configures automated dependency updates for vendored dependencies
+
+version: 2
+updates:
+  # Git submodules (vendored dependencies)
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+    labels:
+      - "dependencies"
+      - "submodule"
+    commit-message:
+      prefix: "chore(submodule)"
+      include: "scope"
+    # Review submodule updates manually since they're vendored
+    open-pull-requests-limit: 5
+
+  # GitHub Actions workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:30"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(actions)"
+      include: "scope"
+
+  # Docker (if Dockerfile is added in future)
+  # - package-ecosystem: "docker"
+  #   directory: "/"
+  #   schedule:
+  #     interval: "weekly"
+  #     day: "monday"
+  #     time: "05:00"
+  #   labels:
+  #     - "dependencies"
+  #     - "docker"
+
+# Note: suprminer uses vendored dependencies via git submodules:
+# - compat/jansson (JSON library)
+# - compat/curl-for-windows (libcurl + OpenSSL for Windows)
+# - compat/pthreads (pthreads for Windows)
+# - compat/nvapi (NVIDIA API for Windows)
+# - compat/getopt (getopt_long for Windows)
+#
+# These are updated via the gitsubmodule configuration above.
+# System dependencies (CUDA, OpenSSL, libcurl, libjansson on Linux)
+# are managed by the OS package manager and not tracked by Dependabot.

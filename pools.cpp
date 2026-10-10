@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "miner.h"
 #include "compat.h"
@@ -330,6 +331,33 @@ bool pool_switch_url(char *params)
 	return pool_switch(-1, nextn);
 }
 
+// Input validation helpers for pool config
+static bool validate_pool_url(const char* url) {
+	if (!url || !*url) return false;
+	if (strncmp(url, "stratum+tcp://", 14) == 0) return true;
+	if (strncmp(url, "stratum+ssl://", 14) == 0) return true;
+	if (strncmp(url, "http://", 7) == 0) return true;
+	if (strncmp(url, "https://", 8) == 0) return true;
+	return false;
+}
+
+static bool validate_pool_intensity(int intensity) {
+	return intensity >= 8 && intensity <= 25;
+}
+
+static bool validate_pool_scantime(int scantime) {
+	return scantime > 0 && scantime <= 300;
+}
+
+static bool validate_pool_timeout(int timeout) {
+	return timeout > 0 && timeout <= 3600;
+}
+
+static bool validate_string_length(const char* str, size_t max_len) {
+	if (!str) return true;
+	return strlen(str) <= max_len;
+}
+
 // Parse pools array in json config
 bool parse_pool_array(json_t *obj)
 {
@@ -372,7 +400,44 @@ bool parse_pool_array(json_t *obj)
 				continue;
 
 			if (json_is_string(val)) {
-				s = strdup(json_string_value(val));
+				const char* str_val = json_string_value(val);
+				
+				// Validate string length
+				if (!validate_string_length(str_val, 1024)) {
+					applog(LOG_ERR, "Pool config value for %s exceeds maximum length", cfg_array_keys[i].name);
+					continue;
+				}
+				
+				// Specific validation for known pool options
+				if (!strcasecmp(cfg_array_keys[i].name, "url")) {
+					if (!validate_pool_url(str_val)) {
+						applog(LOG_ERR, "Invalid pool URL format: %s", str_val);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "intensity")) {
+					int intensity = atoi(str_val);
+					if (!validate_pool_intensity(intensity)) {
+						applog(LOG_ERR, "Invalid pool intensity value: %d (must be 8-25)", intensity);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "scantime")) {
+					int scantime = atoi(str_val);
+					if (!validate_pool_scantime(scantime)) {
+						applog(LOG_ERR, "Invalid pool scantime value: %d (must be 1-300)", scantime);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "timeout")) {
+					int timeout = atoi(str_val);
+					if (!validate_pool_timeout(timeout)) {
+						applog(LOG_ERR, "Invalid pool timeout value: %d (must be 1-3600)", timeout);
+						continue;
+					}
+				}
+				
+				s = strdup(str_val);
 				if (!s)
 					continue;
 
@@ -388,6 +453,42 @@ bool parse_pool_array(json_t *obj)
 					d = 1.0 * json_integer_value(val);
 				else if (json_is_real(val))
 					d = json_real_value(val);
+				
+				// Validate numeric values for known options
+				if (!strcasecmp(cfg_array_keys[i].name, "intensity")) {
+					int intensity = (int)d;
+					if (!validate_pool_intensity(intensity)) {
+						applog(LOG_ERR, "Invalid pool intensity value: %d (must be 8-25)", intensity);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "scantime")) {
+					int scantime = (int)d;
+					if (!validate_pool_scantime(scantime)) {
+						applog(LOG_ERR, "Invalid pool scantime value: %d (must be 1-300)", scantime);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "timeout")) {
+					int timeout = (int)d;
+					if (!validate_pool_timeout(timeout)) {
+						applog(LOG_ERR, "Invalid pool timeout value: %d (must be 1-3600)", timeout);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "max-diff") || !strcasecmp(cfg_array_keys[i].name, "max-rate")) {
+					if (d < 0.0) {
+						applog(LOG_ERR, "Invalid pool %s value: %f (must be >= 0)", cfg_array_keys[i].name, d);
+						continue;
+					}
+				}
+				else if (!strcasecmp(cfg_array_keys[i].name, "shares-limit") || !strcasecmp(cfg_array_keys[i].name, "time-limit")) {
+					if (d < -1) {
+						applog(LOG_ERR, "Invalid pool %s value: %f (must be >= -1)", cfg_array_keys[i].name, d);
+						continue;
+					}
+				}
+				
 				snprintf(buf, sizeof(buf)-1, "%f", d);
 				// applog(LOG_DEBUG, "pool key %s '%f'", options[opt].name, d);
 				parse_arg(options[opt].val, buf);

@@ -3690,6 +3690,34 @@ void parse_arg(int key, char *arg)
 		use_colors = false;
 }
 
+// Input validation helpers
+static bool validate_url(const char* url) {
+	if (!url || !*url) return false;
+	// Must start with supported protocol
+	if (strncmp(url, "stratum+tcp://", 14) == 0) return true;
+	if (strncmp(url, "stratum+ssl://", 14) == 0) return true;
+	if (strncmp(url, "http://", 7) == 0) return true;
+	if (strncmp(url, "https://", 8) == 0) return true;
+	return false;
+}
+
+static bool validate_intensity(int intensity) {
+	return intensity >= 8 && intensity <= 25;
+}
+
+static bool validate_timeout(int timeout) {
+	return timeout > 0 && timeout <= 3600; // 1 second to 1 hour
+}
+
+static bool validate_scantime(int scantime) {
+	return scantime > 0 && scantime <= 300; // 1 second to 5 minutes
+}
+
+static bool validate_string_length(const char* str, size_t max_len) {
+	if (!str) return true; // NULL is valid (will use default)
+	return strlen(str) <= max_len;
+}
+
 void parse_config(json_t* json_obj)
 {
 	int i;
@@ -3711,20 +3739,101 @@ void parse_config(json_t* json_obj)
 			continue;
 
 		if (options[i].has_arg && json_is_string(val)) {
-			char *s = strdup(json_string_value(val));
+			const char* str_val = json_string_value(val);
+			
+			// Validate string length to prevent buffer overflows
+			if (!validate_string_length(str_val, 1024)) {
+				applog(LOG_ERR, "Config value for %s exceeds maximum length", options[i].name);
+				continue;
+			}
+			
+			// Specific validation for known options
+			if (!strcasecmp(options[i].name, "url")) {
+				if (!validate_url(str_val)) {
+					applog(LOG_ERR, "Invalid pool URL format: %s", str_val);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "intensity")) {
+				int intensity = atoi(str_val);
+				if (!validate_intensity(intensity)) {
+					applog(LOG_ERR, "Invalid intensity value: %d (must be 8-25)", intensity);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "timeout")) {
+				int timeout = atoi(str_val);
+				if (!validate_timeout(timeout)) {
+					applog(LOG_ERR, "Invalid timeout value: %d (must be 1-3600)", timeout);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "scantime")) {
+				int scantime = atoi(str_val);
+				if (!validate_scantime(scantime)) {
+					applog(LOG_ERR, "Invalid scantime value: %d (must be 1-300)", scantime);
+					continue;
+				}
+			}
+			
+			char *s = strdup(str_val);
 			if (!s)
 				continue;
 			parse_arg(options[i].val, s);
 			free(s);
 		}
 		else if (options[i].has_arg && json_is_integer(val)) {
+			int int_val = (int) json_integer_value(val);
+			
+			// Validate numeric ranges
+			if (!strcasecmp(options[i].name, "intensity")) {
+				if (!validate_intensity(int_val)) {
+					applog(LOG_ERR, "Invalid intensity value: %d (must be 8-25)", int_val);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "timeout")) {
+				if (!validate_timeout(int_val)) {
+					applog(LOG_ERR, "Invalid timeout value: %d (must be 1-3600)", int_val);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "scantime")) {
+				if (!validate_scantime(int_val)) {
+					applog(LOG_ERR, "Invalid scantime value: %d (must be 1-300)", int_val);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "cpu-priority")) {
+				if (int_val < 0 || int_val > 5) {
+					applog(LOG_ERR, "Invalid cpu-priority value: %d (must be 0-5)", int_val);
+					continue;
+				}
+			}
+			else if (!strcasecmp(options[i].name, "max-log-rate")) {
+				if (int_val < 0 || int_val > 1000) {
+					applog(LOG_ERR, "Invalid max-log-rate value: %d (must be 0-1000)", int_val);
+					continue;
+				}
+			}
+			
 			char buf[16];
-			sprintf(buf, "%d", (int) json_integer_value(val));
+			sprintf(buf, "%d", int_val);
 			parse_arg(options[i].val, buf);
 		}
 		else if (options[i].has_arg && json_is_real(val)) {
+			double real_val = json_real_value(val);
+			
+			// Validate numeric ranges for real values
+			if (!strcasecmp(options[i].name, "max-diff") || !strcasecmp(options[i].name, "max-rate")) {
+				if (real_val < 0.0) {
+					applog(LOG_ERR, "Invalid %s value: %f (must be >= 0)", options[i].name, real_val);
+					continue;
+				}
+			}
+			
 			char buf[16];
-			sprintf(buf, "%f", json_real_value(val));
+			sprintf(buf, "%f", real_val);
 			parse_arg(options[i].val, buf);
 		}
 		else if (!options[i].has_arg) {

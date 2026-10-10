@@ -2,6 +2,15 @@
 ccminer
 *.o
 
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Test binaries
+tests/test_runner
+tests/*.exe
+
 autom4te.cache
 .deps
 

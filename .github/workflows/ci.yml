@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CUDA_VERSION: "12.2"
+
+jobs:
+  lint:
+    name: Lint (clang-format, cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format cppcheck
+
+      - name: Check code formatting (clang-format)
+        run: |
+          find . -name "*.cpp" -o -name "*.h" -o -name "*.cu" -o -name "*.c" -o -name "*.hpp" | \
+          grep -v compat/ | \
+          xargs clang-format --dry-run --Werror
+
+      - name: Static analysis (cppcheck)
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+            --suppress=missingIncludeSystem \
+            --suppress=unmatchedSuppression \
+            --inline-suppr \
+            --quiet \
+            --force \
+            -I compat \
+            -I . \
+            --platform=unix64 \
+            --std=c++11 \
+            --std=c99 \
+            . 2>&1 | tee cppcheck-results.txt
+          # Fail on errors only (not warnings)
+          ! grep -E "^\[" cppcheck-results.txt | grep -E "error:"
+
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            libcurl4-openssl-dev \
+            libjansson-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libopenmpi-dev \
+            ocl-icd-opencl-dev \
+            clinfo
+
+      - name: Install CUDA Toolkit
+        run: |
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-toolkit-${CUDA_VERSION//./-}
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure.sh
+
+      - name: Build
+        run: |
+          make -j$(nproc)
+
+      - name: Verify binary
+        run: |
+          ./ccminer --help || true
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build with MSBuild
+        run: |
+          msbuild ccminer.vcxproj /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Verify binary
+        run: |
+          .\x64\Release\ccminer.exe --help || true
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Check for hardcoded secrets
+        run: |
+          # Check for common secret patterns
+          if grep -r -i "password\|secret\|api_key\|apikey\|token" --include="*.conf" --include="*.json" --include="*.yaml" --include="*.yml" . | grep -v ".example" | grep -v "test" | grep -v "placeholder" | grep -v "your-" | grep -v "change-me"; then
+            echo "::error::Potential hardcoded secrets found in config files"
+            exit 1
+          fi
+
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for outdated submodules
+        run: |
+          git submodule status
+          # Note: This is informational; submodules are vendored dependencies
+
+      - name: Verify vendored dependencies have licenses
+        run: |
+          for dir in compat/*/; do
+            if [ -d "$dir" ]; then
+              echo "Checking $dir"
+              if [ ! -f "$dir/LICENSE" ] && [ ! -f "$dir/LICENSE.txt" ] && [ ! -f "$dir/COPYING" ]; then
+                echo "::warning::$dir may be missing a license file"
+              fi
+            fi
+          done
